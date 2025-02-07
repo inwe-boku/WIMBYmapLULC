@@ -12,7 +12,7 @@ TGEOJSON_FILENAME = "test/spain.geojson"
 
 # rasterfiles
 
-rasterdata = {
+RASTERDATA = {
     "CLC100": {
         "path": "data/U2018_CLC2018_V2020_20u1.tif",
         "result_type": "count",
@@ -40,9 +40,12 @@ def run_wrapper():
 
     print(CONFIG_FILENAME)
     print(TGEOJSON_FILENAME)
+    print(RASTERDATA)
 
     # Call the package's main function with the YAML config filename and GeoJSON dictionary
-    windlulc.main(str(CONFIG_FILENAME), rasterdata, turbines_geojson)
+    windlulc.main(
+        str(CONFIG_FILENAME), RASTERDATA, turbines_geojson, DEBUG=True
+    )
 
 
 if __name__ == "__main__":

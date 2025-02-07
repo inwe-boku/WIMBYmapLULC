@@ -145,38 +145,37 @@ def create_buffer_polygons(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return buffer_gdf
 
 
-def create_concave_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def create_convex_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Creates concave hulls for a GeoDataFrame by dissolving the input geometries,
-    computing the concave hull, and then buffering the result based on the 'buffer'
-    column.
+    Creates convex hulls for clusters of points by:
+      - Dissolving the input GeoDataFrame based on the 'cluster' column.
+      - Computing the convex hull for each dissolved group.
+      - Buffering the convex hull using the 'buffer' column values.
 
-    This function assumes:
-      - The input GeoDataFrame contains a 'buffer' column with buffer distances.
-      - The dissolved GeoDataFrame provides a 'concave_hull' method (custom-defined)
-        to compute the concave hull.
+    The function returns a new GeoDataFrame with its geometry replaced by the buffered convex hulls.
 
     Parameters:
-        points (gpd.GeoDataFrame): Input GeoDataFrame with geometries and a 'buffer' column.
+        points (gpd.GeoDataFrame): Input GeoDataFrame containing:
+            - A 'cluster' column for grouping points.
+            - A 'buffer' column specifying the buffer distance for each group.
+            - A 'geometry' column with the point geometries.
 
     Returns:
-        gpd.GeoDataFrame: A new GeoDataFrame with the buffered concave hull as its geometry.
+        gpd.GeoDataFrame: A new GeoDataFrame with the updated geometry based on the buffered convex hulls.
     """
-    # Dissolve the geometries (this aggregates all features into a single or grouped geometry)
-    dissolved = points.dissolve()
+    # Dissolve the points by the 'cluster' attribute.
+    grouped = points.dissolve()
 
-    # Compute the concave hull of the dissolved geometry.
-    # Note: The concave_hull method must be defined for the resulting GeoDataFrame.
-    concave = dissolved.concave_hull()
+    # Compute the convex hull for each group.
+    convex_hulls = grouped.convex_hull
 
-    # Buffer the concave hull using the buffer distances from the dissolved GeoDataFrame.
-    buffered_concave = concave.buffer(dissolved["buffer"].values)
+    # Buffer the convex hulls using the corresponding buffer distances.
+    buffered_hulls = convex_hulls.buffer(grouped["buffer"].values)
 
-    # Create a shallow copy of the dissolved GeoDataFrame.
-    result_gdf = dissolved.copy(deep=False)
-
-    # Replace the geometry column with the new buffered concave hull geometry.
-    result_gdf["geometry"] = buffered_concave
+    # Create a shallow copy of the grouped GeoDataFrame to retain other attributes.
+    result_gdf = grouped.copy(deep=False)
+    result_gdf.drop(columns=["geometry"], inplace=True)
+    result_gdf["geometry"] = buffered_hulls
 
     return result_gdf
 
@@ -287,7 +286,7 @@ def sample_raster_values_within_polygon(
         raise ValueError("Invalid result_type. Choose 'count' or 'mean'.")
 
 
-def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict):
+def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict, DEBUG=False):
     """
     Main function for the windlulc package that processes the YAML configuration
     and GeoJSON data.
@@ -298,8 +297,9 @@ def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict):
     """
     # Read and display the YAML configuration
     config = read_yaml_config(PACKAGE_DIR / yaml_filename)
-    print("YAML Configuration:")
-    print(config)
+    if DEBUG:
+        print("YAML Configuration:")
+        print(config)
 
     # Convert the turbines GeoJSON to a GeoPandas GeoDataFrame and display it
     turbines_gdf = turbines_geojson_to_gdf(geojson_dict)
@@ -309,9 +309,12 @@ def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict):
     # create a hull around the turbines (singlebuffer, concave or convex) also using the average distance
     hull_gdf = create_hulls(turbines_gdf, hull_type=config["hulltype"])
 
+    result = {}
+
     for name, values in rasterdata.items():
-        result = sample_raster_values_within_polygon(
+        sampleres = sample_raster_values_within_polygon(
             values["path"], hull_gdf, values["result_type"]
         )
+        result[name] = sampleres
+    if DEBUG:
         print(result)
-    print(hull_gdf)
