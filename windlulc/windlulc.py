@@ -308,8 +308,8 @@ def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict, DEBUG=False):
     turbines_gdf["buffer"] = cluster_distance(turbines_gdf["geometry"])
     # create a hull around the turbines (singlebuffer, concave or convex) also using the average distance
     hull_gdf = create_hulls(turbines_gdf, hull_type=config["hulltype"])
-
-    result = {}
+    print(hull_gdf)
+    result = {"area_ha": int(hull_gdf["geometry"][0].area/10000)}
 
     for name, values in rasterdata.items():
         sampleres = sample_raster_values_within_polygon(
