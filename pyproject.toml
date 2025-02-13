@@ -5,7 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "windlulc"
 version = "2025.02.06"
-dependencies = ["numpy", "geopandas", "scipy", "shapely", "pyyaml", "rasterio"]
+dependencies = [
+    "pandas",
+    "openpyxl",
+    "pyarrow",
+    "numpy",
+    "geopandas",
+    "scipy",
+    "shapely",
+    "pyyaml",
+    "rasterio",
+]
 requires-python = ">=3.10"
 authors = [{ name = "Christian Mikovits" }, { name = "Thomas Öberseder" }]
 maintainers = [{ name = "Christian Mikovits" }, { name = "Thomas Öberseder" }]

@@ -10,15 +10,21 @@ import windlulc
 CONFIG_FILENAME = "windlulc.yaml"
 TGEOJSON_FILENAME = "test/spain.geojson"
 
-# rasterfiles
-
-RASTERDATA = {
-    "CLC100": {
+# datafiles
+DATA = {
+    "clc100": {
         "path": "data/U2018_CLC2018_V2020_20u1.tif",
+        "type": "clc",
         "result_type": "count",
     },
-    "SLOPE90": {
+    "slope": {
+        "type": "raster",
         "path": "data/Copernicus_SLOPE_90m_COG_3035.tif",
+        "result_type": "mean",
+    },
+    "tri": {
+        "path": "data/Copernicus_TRI_90m_COG_3035.tif",
+        "type": "raster",
         "result_type": "mean",
     },
 }
@@ -40,11 +46,14 @@ def run_wrapper():
 
     print(CONFIG_FILENAME)
     print(TGEOJSON_FILENAME)
-    print(RASTERDATA)
+    print(DATA)
 
     # Call the package's main function with the YAML config filename and GeoJSON dictionary
     windlulc.main(
-        str(CONFIG_FILENAME), RASTERDATA, turbines_geojson, DEBUG=True
+        str(CONFIG_FILENAME),
+        DATA,
+        turbines_geojson,
+        DEBUG=True,
     )
 
 

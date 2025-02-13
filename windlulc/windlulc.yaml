@@ -1,8 +1,9 @@
-weighting_factors:
-  area: 1.5
-  slope: 0.5
-  tri: 0.5
-  education: 0
-
 hulltype: "concave"
+clctype: "clc100"
 crs: 3035
+
+weighting_factors:
+  area: 1
+  slope: 1
+  tri: 1
+  clc: 1

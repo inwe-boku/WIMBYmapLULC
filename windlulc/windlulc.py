@@ -1,7 +1,9 @@
+import os
 from typing import Union
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rasterio
 import yaml
 from rasterio.mask import mask
@@ -286,7 +288,60 @@ def sample_raster_values_within_polygon(
         raise ValueError("Invalid result_type. Choose 'count' or 'mean'.")
 
 
-def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict, DEBUG=False):
+def find_best_matching_row(sampledata, csvdata, config):
+    """
+    Given a sample dictionary and a CSV (as a pandas DataFrame),
+    adapt the sample data to match the CSV columns by flattening any nested
+    dictionaries for keys starting with "clc" into the main dict with keys formatted as "<key>_<subkey>",
+    compute the r_square (sum of squared differences) for each row, and return the row with the lowest r_square.
+
+    Parameters:
+      sampledata (dict): Expected to be in a format where keys starting with "clc" are dictionaries that need flattening,
+                         along with other keys.
+      csvdata (pd.DataFrame): DataFrame with columns corresponding to the adapted sample data.
+
+    Returns:
+      pd.Series: The row from csvdata with the minimum r_square value.
+    """
+    # Adapt the sample data by iterating over all keys.
+    adapted_sampledata = {}
+    for key, value in sampledata.items():
+        if key.startswith("clc") and isinstance(value, dict):
+            # Flatten the nested dictionary for keys that start with "clc"
+            for subkey, subvalue in value.items():
+                adapted_sampledata[f"{key}_{subkey}"] = subvalue
+        else:
+            adapted_sampledata[key] = value
+
+    # Helper function to compute the r_square for a given row
+    def compute_r_square(row, sample):
+        return sum((row[col] - sample[col]) ** 2 for col in sample if col in row)
+
+    # Compute r_square for each row in the DataFrame
+    csvdata["r_square"] = csvdata.apply(
+        lambda row: compute_r_square(row, adapted_sampledata), axis=1
+    )
+
+    # Debug output: Display all rows with their corresponding r_square values
+    print("Debug: Rows with corresponding r_square values:")
+    print(csvdata[["r_square"]])
+
+    # Save the debug information to a CSV file
+    debug_file_path = "debug.csv"
+    csvdata.to_csv(debug_file_path, index=False)
+    print(f"Debug data saved to {debug_file_path}")
+
+    # Identify and return the row with the lowest r_square
+    best_match = csvdata.loc[csvdata["r_square"].idxmin()]
+    return best_match
+
+
+def main(
+    yaml_filename: str,
+    data: dict,
+    geojson_dict: dict,
+    DEBUG=False,
+):
     """
     Main function for the windlulc package that processes the YAML configuration
     and GeoJSON data.
@@ -301,6 +356,14 @@ def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict, DEBUG=False):
         print("YAML Configuration:")
         print(config)
 
+    clclookup_filename = os.path.join(PACKAGE_DIR, "data", "CLC.xlsx")
+    clcdata_filename = os.path.join(
+        PACKAGE_DIR, "data", config["hulltype"] + ".feather"
+    )
+
+    clclookup = pd.read_excel(clclookup_filename, sheet_name=config["clctype"])
+    clcdata = pd.read_feather(clcdata_filename)
+
     # Convert the turbines GeoJSON to a GeoPandas GeoDataFrame and display it
     turbines_gdf = turbines_geojson_to_gdf(geojson_dict)
     turbines_gdf = turbines_gdf.to_crs(config["crs"])
@@ -309,12 +372,19 @@ def main(yaml_filename: str, rasterdata: dict, geojson_dict: dict, DEBUG=False):
     # create a hull around the turbines (singlebuffer, concave or convex) also using the average distance
     hull_gdf = create_hulls(turbines_gdf, hull_type=config["hulltype"])
     # begin the result dictionary with prefilled area
-    result = {"area_ha": int(hull_gdf["geometry"][0].area/10000)}
-
-    for name, values in rasterdata.items():
-        sampleres = sample_raster_values_within_polygon(
-            values["path"], hull_gdf, values["result_type"]
-        )
-        result[name] = sampleres
+    sampleresult = {"area": int(hull_gdf["geometry"][0].area)}
+    # loop throug all raster and vectorfiles defined
+    for name, values in data.items():
+        if values["type"] == "clc" and name != config["clctype"]:
+            continue
+        if values["type"] in ("raster", "clc"):
+            sampleres = sample_raster_values_within_polygon(
+                values["path"], hull_gdf, values["result_type"]
+            )
+        sampleresult[name] = sampleres
     if DEBUG:
-        print(result)
+        print(sampleresult)
+
+    clcresult = find_best_matching_row(sampleresult, clcdata, config)
+
+    print(clcresult)
