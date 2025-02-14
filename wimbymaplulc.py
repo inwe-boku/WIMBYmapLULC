@@ -49,12 +49,13 @@ def run_wrapper():
     print(DATA)
 
     # Call the package's main function with the YAML config filename and GeoJSON dictionary
-    windlulc.main(
+    mapresults = windlulc.main(
         str(CONFIG_FILENAME),
         DATA,
         turbines_geojson,
-        DEBUG=True,
+        DEBUG=False,
     )
+    print(mapresults)
 
 
 if __name__ == "__main__":

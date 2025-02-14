@@ -2,8 +2,11 @@ hulltype: "concave"
 clctype: "clc100"
 crs: 3035
 
+clc_minperc: 10
+clc_matchperc: 30
+
 weighting_factors:
-  area: 1
-  slope: 1
-  tri: 1
+  area: 0
+  slope: 0.5
+  tri: 0.5
   clc: 1
