@@ -702,8 +702,8 @@ packages:
   timestamp: 1737119101255
 - pypi: .
   name: windlulc
-  version: 2025.2.6
-  sha256: 5e5b00699cac44b7da91241eb818a7d6c1a3a6f6204717ea0fa203ffd12c732a
+  version: 2025.2.14
+  sha256: 2f993164ddab2541a4c8141552ae43d393a8537200db1ad91a234bd5a9595d87
   requires_dist:
   - pandas
   - openpyxl
