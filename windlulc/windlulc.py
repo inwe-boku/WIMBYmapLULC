@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Union
 
@@ -239,8 +240,8 @@ def sample_raster_values_within_polygon(
 
     Returns:
       dict or float:
-          dict: {raster_value: count} if result_type is "count"
-          float: average raster value if result_type is "mean"
+          dict: {raster_value: count} if result_type is "count" (empty dict if no valid pixels)
+          float: average raster value if result_type is "mean" (None if no valid pixels)
 
     Raises:
       ValueError: If result_type is not "count" or "mean".
@@ -271,17 +272,21 @@ def sample_raster_values_within_polygon(
     # Filter out nodata values if defined.
     valid_data = data if nodata is None else data[data != nodata]
 
+    # Handle the case where no valid sampling values are present.
     if valid_data.size == 0:
-        pixel_count = {}
-        mean_value = None
-    else:
-        unique, counts = np.unique(valid_data, return_counts=True)
-        pixel_count = dict(zip(unique, counts))
-        npixel_count = {int(k): int(v) for k, v in pixel_count.items()}
-        mean_value = int(np.mean(valid_data))
+        if result_type == "count":
+            return {}
+        elif result_type == "mean":
+            return None
+        else:
+            raise ValueError("Invalid result_type. Choose 'count' or 'mean'.")
+
+    unique, counts = np.unique(valid_data, return_counts=True)
+    pixel_count = {int(k): int(v) for k, v in zip(unique, counts)}
+    mean_value = float(np.mean(valid_data))
 
     if result_type == "count":
-        return npixel_count
+        return pixel_count
     elif result_type == "mean":
         return mean_value
     else:
@@ -431,8 +436,8 @@ def find_best_matching_row(sampledata, csvdata, config):
 
     # Debug output: Display all rows with their corresponding r_square values.
     # Save the debug information to a CSV file.
-    debug_file_path = "debug.csv"
-    csvdata.to_csv(debug_file_path, index=False)
+    # debug_file_path = "debug.csv"
+    # csvdata.to_csv(debug_file_path, index=False)
 
     # 5. Reconstruct the output dictionary with the same structure as sampledata,
     #    but with values taken from the best matching row.
@@ -671,4 +676,6 @@ def main(
     mapresult = translate_match_results(sampleresult, matchresult, clclookup)
     if DEBUG:
         print(mapresult)
+    hull_dict = json.loads(hull_gdf.to_json())
+    mapresult["hull"] = hull_dict
     return mapresult
