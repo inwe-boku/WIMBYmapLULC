@@ -32,7 +32,7 @@ packages = ["windlulc"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-"windlulc" = ["windlulc.yaml"]
+["windlulc.yaml", "*.feather", "CLC.xlsx"]
 
 [tool.pixi.project]
 channels = ["conda-forge"]
