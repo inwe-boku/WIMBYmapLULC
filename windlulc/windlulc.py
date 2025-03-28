@@ -424,8 +424,8 @@ def find_best_matching_row(sampledata, csvdata, config):
 
     # Debug output: Display all rows with their corresponding r_square values.
     # Save the debug information to a CSV file.
-    debug_file_path = "debug.csv"
-    csvdata.to_csv(debug_file_path, index=False)
+    # debug_file_path = "debug.csv"
+    # csvdata.to_csv(debug_file_path, index=False)
 
     # 5. Reconstruct the output dictionary with the same structure as sampledata,
     #    but with values taken from the best matching row.
