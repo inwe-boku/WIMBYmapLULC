@@ -112,9 +112,7 @@ def create_hulls(points, hull_type="concave"):
     elif hull_type == "concave":
         hull_gdf = create_concave_hulls(points)
     else:
-        raise ValueError(
-            "Invalid hull_type. Choose from 'buffer', 'convex', or 'concave'."
-        )
+        raise ValueError("Invalid hull_type. Choose from 'buffer', 'convex', or 'concave'.")
     hull_gdf.reset_index(inplace=True)
     hull_gdf["hull_id"] = hull_gdf.index + 1  # Start IDs from 1
     return hull_gdf
@@ -205,10 +203,10 @@ def create_concave_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     # Compute the concave hull on the dissolved geometry.
     # Note: The 'concave_hull' method should be defined for the dissolved GeoDataFrame.
-    concave = dissolved.concave_hull()
+    concave = dissolved.concave_hull(ratio=0.01)
 
     # Buffer the computed concave hull using the buffer distances from the dissolved data.
-    buffered_concave = concave.buffer(dissolved["buffer"].values)
+    buffered_concave = concave.buffer(dissolved["buffer"].values / 10)
 
     # Create a shallow copy of the dissolved GeoDataFrame and update its geometry.
     result_gdf = dissolved.copy(deep=False)
@@ -254,11 +252,7 @@ def sample_raster_values_within_polygon(
             if polygon.crs is not None and polygon.crs != target_crs:
                 polygon = polygon.to_crs(target_crs)
             # Use the first geometry in the GeoPandas object.
-            geom = (
-                polygon.geometry.iloc[0]
-                if isinstance(polygon, gpd.GeoDataFrame)
-                else polygon.iloc[0]
-            )
+            geom = polygon.geometry.iloc[0] if isinstance(polygon, gpd.GeoDataFrame) else polygon.iloc[0]
         else:
             # Assume the shapely geometry is already in the correct CRS.
             geom = polygon
@@ -282,6 +276,7 @@ def sample_raster_values_within_polygon(
             raise ValueError("Invalid result_type. Choose 'count' or 'mean'.")
 
     unique, counts = np.unique(valid_data, return_counts=True)
+    counts = counts * 100
     pixel_count = {int(k): int(v) for k, v in zip(unique, counts)}
     mean_value = float(np.mean(valid_data))
 
@@ -361,9 +356,7 @@ def find_best_matching_row(sampledata, csvdata, config):
 
     # Remove clc keys with values below the threshold.
     keys_to_remove = [
-        key
-        for key in adapted_sampledata
-        if key.startswith("clc") and adapted_sampledata[key] < clc_threshold
+        key for key in adapted_sampledata if key.startswith("clc") and adapted_sampledata[key] < clc_threshold
     ]
     for key in keys_to_remove:
         del adapted_sampledata[key]
@@ -421,23 +414,18 @@ def find_best_matching_row(sampledata, csvdata, config):
     # 4. If no match is found (i.e. best_rsq is infinite), iteratively eliminate the smallest clc value.
     while best_rsq == float("inf"):
         remaining_clc_keys = [k for k in adapted_sampledata if k.startswith("clc")]
-        if (
-            len(remaining_clc_keys)
-            < initial_clc_count * config["clc_matchperc"] / 100.0
-        ):
+        if len(remaining_clc_keys) < initial_clc_count * config["clc_matchperc"] / 100.0:
             print("Not enough clc keys remain, no valid match found.")
             return {}
         smallest_key = min(remaining_clc_keys, key=lambda k: adapted_sampledata[k])
-        print(
-            f"Eliminating smallest clc key: {smallest_key} with value {adapted_sampledata[smallest_key]}"
-        )
+        print(f"Eliminating smallest clc key: {smallest_key} with value {adapted_sampledata[smallest_key]}")
         del adapted_sampledata[smallest_key]
         best_match, best_rsq = attempt_match(adapted_sampledata)
 
     # Debug output: Display all rows with their corresponding r_square values.
     # Save the debug information to a CSV file.
-    # debug_file_path = "debug.csv"
-    # csvdata.to_csv(debug_file_path, index=False)
+    debug_file_path = "debug.csv"
+    csvdata.to_csv(debug_file_path, index=False)
 
     # 5. Reconstruct the output dictionary with the same structure as sampledata,
     #    but with values taken from the best matching row.
@@ -449,11 +437,7 @@ def find_best_matching_row(sampledata, csvdata, config):
             for subkey in value.keys():
                 flat_val_key = f"{key}_VAL_{subkey}"
                 flat_cd_key = f"{key}_CD_{subkey}"
-                new_val = (
-                    best_match[flat_val_key]
-                    if flat_val_key in best_match
-                    else value[subkey]
-                )
+                new_val = best_match[flat_val_key] if flat_val_key in best_match else value[subkey]
                 new_cd = best_match[flat_cd_key] if flat_cd_key in best_match else None
                 # Convert to plain Python numbers.
                 new_subdict[subkey] = {
@@ -572,12 +556,8 @@ def translate_match_results(sampledata, match_result, clclookup):
                 # For the matching result, we expect the same clc key structure:
                 # match_result[key] is a dict with subkeys mapping to dicts containing "VAL" and "CD".
                 if key in match_result and subkey in match_result[key]:
-                    clcmatch[translated_name] = to_python(
-                        match_result[key][subkey]["VAL"]
-                    )
-                    clcmatchchange[translated_name] = to_python(
-                        match_result[key][subkey]["CD"]
-                    )
+                    clcmatch[translated_name] = to_python(match_result[key][subkey]["VAL"])
+                    clcmatchchange[translated_name] = to_python(match_result[key][subkey]["CD"])
                 else:
                     clcmatch[translated_name] = None
                     clcmatchchange[translated_name] = None
@@ -588,7 +568,7 @@ def translate_match_results(sampledata, match_result, clclookup):
         match_val = clcmatch.get(name)
         match_change = clcmatchchange.get(name)
         sample_val = clcsample.get(name)
-        if match_val is None or match_val == 0:
+        if match_val is None or match_change is None or match_val == 0:
             clcsamplechange[name] = None
         else:
             clcsamplechange[name] = (match_change / match_val) * sample_val
@@ -605,16 +585,10 @@ def translate_match_results(sampledata, match_result, clclookup):
     # The result is kept as a float with one decimal.
     clcsamplecperc = {}
     for name, sample_val in output["clcsample"].items():
-        if (
-            sample_val is None
-            or sample_val == 0
-            or output["clcsamplechange"].get(name) is None
-        ):
+        if sample_val is None or sample_val == 0 or output["clcsamplechange"].get(name) is None:
             clcsamplecperc[name] = None
         else:
-            clcsamplecperc[name] = round(
-                (output["clcsamplechange"][name] / sample_val) * 100, 1
-            )
+            clcsamplecperc[name] = round((output["clcsamplechange"][name] / sample_val) * 100, 1)
 
     output["clcsamplecperc"] = clcsamplecperc
 
@@ -642,9 +616,7 @@ def main(
         print(config)
 
     clclookup_filename = os.path.join(PACKAGE_DIR, "data", "CLC.xlsx")
-    clcdata_filename = os.path.join(
-        PACKAGE_DIR, "data", config["hulltype"] + ".feather"
-    )
+    clcdata_filename = os.path.join(PACKAGE_DIR, "data", config["hulltype"] + ".feather")
 
     clclookup = pd.read_excel(clclookup_filename, sheet_name=config["clctype"])
     clcdata = pd.read_feather(clcdata_filename)
@@ -656,6 +628,8 @@ def main(
     turbines_gdf["buffer"] = cluster_distance(turbines_gdf["geometry"])
     # create a hull around the turbines (singlebuffer, concave or convex) also using the average distance
     hull_gdf = create_hulls(turbines_gdf, hull_type=config["hulltype"])
+    if DEBUG:
+        hull_gdf.to_file("debug.geojson", driver="GeoJSON")
     # begin the result dictionary with prefilled area
     sampleresult = {"area": int(hull_gdf["geometry"][0].area)}
     # loop throug all raster and vectorfiles defined
@@ -663,9 +637,7 @@ def main(
         if values["type"] == "clc" and name != config["clctype"]:
             continue
         if values["type"] in ("raster", "clc"):
-            sampleres = sample_raster_values_within_polygon(
-                values["path"], hull_gdf, values["result_type"]
-            )
+            sampleres = sample_raster_values_within_polygon(values["path"], hull_gdf, values["result_type"])
         sampleresult[name] = sampleres
     if DEBUG:
         print(sampleresult)

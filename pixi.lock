@@ -703,7 +703,7 @@ packages:
 - pypi: .
   name: windlulc
   version: 2025.2.14
-  sha256: 2f993164ddab2541a4c8141552ae43d393a8537200db1ad91a234bd5a9595d87
+  sha256: 98f029852b6e28e7f0f1ed9936c147280f274d097731d7ae396aba20d2531557
   requires_dist:
   - pandas
   - openpyxl
