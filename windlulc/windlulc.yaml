@@ -10,3 +10,9 @@ weighting_factors:
   slope: 0.5
   tri: 0.5
   clc: 1
+
+hullconfig:
+  bufferscale1: 0.66667
+  bufferscale2: 0.5
+  sample_points: 99
+  concave_ratio: 0.25

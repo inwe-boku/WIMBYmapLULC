@@ -8,7 +8,7 @@ import windlulc
 # basic config
 
 CONFIG_FILENAME = "windlulc.yaml"
-TGEOJSON_FILENAME = "test/austria_stp.geojson"
+TGEOJSON_FILENAME = "test/austria_alpine.geojson"
 
 # datafiles
 DATA = {
@@ -55,7 +55,6 @@ def run_wrapper():
         turbines_geojson,
         DEBUG=True,
     )
-    print(mapresults)
 
 
 if __name__ == "__main__":

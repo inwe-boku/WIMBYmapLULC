@@ -9,7 +9,7 @@ import rasterio
 import yaml
 from rasterio.mask import mask
 from scipy.spatial import distance
-from shapely.geometry import mapping, shape
+from shapely.geometry import Point, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
 from . import PACKAGE_DIR
@@ -104,13 +104,14 @@ def cluster_distance(points, threshold=9) -> int:
     return int(np.mean(min_distances))
 
 
-def create_hulls(points, hull_type="concave"):
+def create_hulls(points, config):
+    hull_type = config["hulltype"]
     if hull_type == "buffer":
-        hull_gdf = create_buffer_polygons(points)
+        hull_gdf = create_buffer_polygons(points, config["hullconfig"])
     elif hull_type == "convex":
-        hull_gdf = create_convex_hulls(points)
+        hull_gdf = create_convex_hulls(points, config["hullconfig"])
     elif hull_type == "concave":
-        hull_gdf = create_concave_hulls(points)
+        hull_gdf = create_concave_hulls(points, config["hullconfig"])
     else:
         raise ValueError("Invalid hull_type. Choose from 'buffer', 'convex', or 'concave'.")
     hull_gdf.reset_index(inplace=True)
@@ -118,100 +119,151 @@ def create_hulls(points, hull_type="concave"):
     return hull_gdf
 
 
-def create_buffer_polygons(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def create_buffer_polygons(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoDataFrame:
     """
-    Creates buffer polygons for each geometry in a GeoDataFrame based on the buffer
-    distance provided in the 'buffer' column.
+    Generate buffer polygons for each geometry in a GeoDataFrame using provided configuration.
 
-    This function uses GeoPandas' vectorized buffer operation to generate buffer polygons
-    for each geometry. It returns a new GeoDataFrame with all original attributes, but
-    the 'geometry' column is replaced by the computed buffer polygons.
+    This function computes buffer polygons for each feature in the input GeoDataFrame by
+    scaling the distances specified in the 'buffer' column with the scale factors defined in
+    the `hullconfig` mapping. Returns a shallow copy of the original GeoDataFrame,
+    preserving all non-geometric attributes and the coordinate reference system (CRS), but
+    with the 'geometry' column replaced by the resulting buffer polygons.
 
     Args:
-        points (gpd.GeoDataFrame): A GeoDataFrame containing geometries and a 'buffer'
-                                   column specifying the buffer distance for each geometry.
+        points (gpd.GeoDataFrame): Input GeoDataFrame containing geometries and a 'buffer'
+            column specifying the base distance for each feature.
+        hullconfig (dict): Configuration mapping containing:
+            - 'bufferscale1' (float): First scaling factor for buffer distances.
+            - 'bufferscale2' (float): Second scaling factor for buffer distances.
 
     Returns:
-        gpd.GeoDataFrame: A new GeoDataFrame with the buffer polygons as its geometry.
+        gpd.GeoDataFrame: A shallow copy of `points` where:
+            - The 'geometry' column is replaced by the computed buffer polygons.
+            - The original CRS and all non-geometric columns are preserved.
     """
-    # Compute buffer polygons using the values from the 'buffer' column
-    buffer_polygons = points.buffer(points["buffer"].values)
+    # Compute combined scale and buffer distances
+    scale_sum = hullconfig["bufferscale1"] + hullconfig["bufferscale2"]
+    buffer_distances = points["buffer"].values * scale_sum
 
-    # Create a shallow copy of the input GeoDataFrame
+    # Generate buffer polygons
+    buffer_polygons = points.buffer(buffer_distances)
+
+    # Return a shallow copy with updated geometry
     buffer_gdf = points.copy(deep=False)
-
-    # Replace the geometry column with the computed buffer polygons
     buffer_gdf["geometry"] = buffer_polygons
-
     return buffer_gdf
 
 
-def create_convex_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def create_convex_hulls(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoDataFrame:
     """
-    Creates convex hulls for clusters of points by:
-      - Dissolving the input GeoDataFrame based on the 'cluster' column.
-      - Computing the convex hull for each dissolved group.
-      - Buffering the convex hull using the 'buffer' column values.
+    Generate buffered convex hulls for clustered points using provided configuration.
 
-    The function returns a new GeoDataFrame with its geometry replaced by the buffered convex hulls.
+    This function dissolves the input GeoDataFrame by the 'cluster' column to group points,
+    computes the convex hull for each cluster, scales the buffer distances defined in the
+    'buffer' column by the sum of 'bufferscale1' and 'bufferscale2' from `hullconfig`, and
+    applies the buffer to each hull. It returns a shallow copy of the dissolved GeoDataFrame
+    with its 'geometry' column replaced by these buffered convex hulls.
 
-    Parameters:
+    Args:
         points (gpd.GeoDataFrame): Input GeoDataFrame containing:
-            - A 'cluster' column for grouping points.
-            - A 'buffer' column specifying the buffer distance for each group.
-            - A 'geometry' column with the point geometries.
+            - 'buffer' column specifying base buffer distances per cluster.
+            - geometry column with point geometries.
+        hullconfig (dict): Configuration mapping containing:
+            - 'bufferscale1' (float): First scaling factor.
+            - 'bufferscale2' (float): Second scaling factor.
 
     Returns:
-        gpd.GeoDataFrame: A new GeoDataFrame with the updated geometry based on the buffered convex hulls.
+        gpd.GeoDataFrame: A shallow copy of the dissolved GeoDataFrame where:
+            - The 'geometry' column contains the buffered convex hulls.
+            - All other non-geometric columns are preserved.
     """
-    # Dissolve the points by the 'cluster' attribute.
+    # Dissolve by cluster to group points
     grouped = points.dissolve()
 
-    # Compute the convex hull for each group.
-    convex_hulls = grouped.convex_hull
+    # Compute combined scale and buffered convex hulls
+    scale_sum = hullconfig["bufferscale1"] + hullconfig["bufferscale2"]
+    buffered_hulls = grouped.convex_hull.buffer(grouped["buffer"].values * scale_sum)
 
-    # Buffer the convex hulls using the corresponding buffer distances.
-    buffered_hulls = convex_hulls.buffer(grouped["buffer"].values)
-
-    # Create a shallow copy of the grouped GeoDataFrame to retain other attributes.
+    # Return a shallow copy with updated geometry
     result_gdf = grouped.copy(deep=False)
-    result_gdf.drop(columns=["geometry"], inplace=True)
     result_gdf["geometry"] = buffered_hulls
-
     return result_gdf
 
 
-def create_concave_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def sample_buffer_boundaries(points: gpd.GeoDataFrame, scale: float, n_points: int) -> gpd.GeoDataFrame:
     """
-    Creates concave hulls for the input GeoDataFrame by dissolving its geometries,
-    computing the concave hull on the dissolved data, and then buffering the result
-    using the 'buffer' column from the dissolved GeoDataFrame.
+    Sample boundary points along scaled buffer for each feature.
 
-    This function assumes that:
-      - The input GeoDataFrame has a 'buffer' column with numeric values for buffering.
-      - The dissolved GeoDataFrame supports a custom `concave_hull()` method that computes
-        a concave hull.
+    This function computes a buffer around each geometry in the input GeoDataFrame by
+    scaling the 'buffer' column with the provided `scale` factor. It extracts the
+    boundary of each buffered polygon and samples `n_points` evenly spaced coordinates
+    along that boundary. Returns a new GeoDataFrame of point geometries preserving all
+    original non-geometric attributes.
 
-    Parameters:
-        points (gpd.GeoDataFrame): A GeoDataFrame containing geometries and a 'buffer' column.
+    Args:
+        points (gpd.GeoDataFrame): Input GeoDataFrame containing:
+            - A numeric 'buffer' column specifying base buffer distances per feature.
+            - A point geometry column.
+        scale (float): Scaling factor applied to each feature's buffer distance.
+        n_points (int): Number of points to sample along each buffer boundary.
 
     Returns:
-        gpd.GeoDataFrame: A new GeoDataFrame with its geometry replaced by the buffered concave hull.
+        gpd.GeoDataFrame: A GeoDataFrame containing sampled boundary points with:
+            - The same CRS as the input.
+            - All original non-geometric columns preserved.
     """
-    # Dissolve the geometries to aggregate them into a single (or grouped) geometry.
-    dissolved = points.dissolve()
+    records = []
+    for _, row in points.iterrows():
+        buf_geom = row.geometry.buffer(row["buffer"] * scale)
+        boundary = buf_geom.boundary
+        coords = list(boundary.coords)
+        step = max(1, len(coords) // n_points)
+        for coord in coords[::step]:
+            rec = row.to_dict()
+            rec["geometry"] = Point(coord)
+            records.append(rec)
+    return gpd.GeoDataFrame(records, crs=points.crs)
 
-    # Compute the concave hull on the dissolved geometry.
-    # Note: The 'concave_hull' method should be defined for the dissolved GeoDataFrame.
-    concave = dissolved.concave_hull(ratio=0.01)
 
-    # Buffer the computed concave hull using the buffer distances from the dissolved data.
-    buffered_concave = concave.buffer(dissolved["buffer"].values / 10)
+def create_concave_hulls(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoDataFrame:
+    """
+    Generate buffered concave hulls for clustered points using provided configuration.
 
-    # Create a shallow copy of the dissolved GeoDataFrame and update its geometry.
-    result_gdf = dissolved.copy(deep=False)
-    result_gdf["geometry"] = buffered_concave
+    This function optionally samples points for boundary extraction using
+    `sample_buffer_boundaries`, dissolves the GeoDataFrame by the 'cluster' column,
+    computes concave hulls with the `concave_hull` method (using
+    `hullconfig['concave_ratio']`), and buffers each hull by the 'buffer' values scaled
+    by `hullconfig['bufferscale2']`. Returns a shallow copy preserving non-geometric
+    attributes and CRS, with updated geometries.
 
+    Args:
+        points (gpd.GeoDataFrame): Input GeoDataFrame containing:
+            - 'buffer' column specifying base buffer distances per cluster.
+            - geometry column with point geometries.
+        hullconfig (dict): Configuration mapping containing:
+            - 'bufferscale1' (float): Factor for sampling boundaries.
+            - 'bufferscale2' (float): Factor for buffering hulls.
+            - 'sample_points' (int): Number of points used in sampling.
+            - 'concave_ratio' (float): Ratio parameter for the concave hull algorithm.
+
+    Returns:
+        gpd.GeoDataFrame: A shallow copy of the dissolved GeoDataFrame where:
+            - The 'geometry' column contains the buffered concave hulls.
+            - All other non-geometric columns are preserved.
+    """
+    # Sample boundaries based on configuration
+    bp = sample_buffer_boundaries(points, hullconfig["bufferscale1"], hullconfig["sample_points"])
+    # Dissolve by cluster to group points
+    grouped = bp.dissolve()
+
+    # Compute buffered concave hulls
+    hulls = grouped.concave_hull(ratio=hullconfig["concave_ratio"]).buffer(
+        grouped["buffer"].values * hullconfig["bufferscale2"]
+    )
+
+    # Return shallow copy with updated geometry
+    result_gdf = grouped.copy(deep=False)
+    result_gdf["geometry"] = hulls
     return result_gdf
 
 
@@ -535,7 +587,7 @@ def translate_match_results(sampledata, match_result, clclookup):
 
     # Set 'area' to be the sampledata area divided by 10000.
     if "area" in sampledata:
-        output["area"] = to_python(sampledata["area"]) / 10000.0
+        output["area"] = to_python(sampledata["area"]) / 10000
 
     # Copy any non-clc keys (except 'area') from sampledata.
     for key, value in sampledata.items():
@@ -552,12 +604,12 @@ def translate_match_results(sampledata, match_result, clclookup):
         if key.startswith("clc") and isinstance(clc_dict, dict):
             for subkey, original_value in clc_dict.items():
                 translated_name = translate_clc(subkey)
-                clcsample[translated_name] = to_python(original_value)
+                clcsample[translated_name] = to_python(original_value / 100)
                 # For the matching result, we expect the same clc key structure:
                 # match_result[key] is a dict with subkeys mapping to dicts containing "VAL" and "CD".
                 if key in match_result and subkey in match_result[key]:
-                    clcmatch[translated_name] = to_python(match_result[key][subkey]["VAL"])
-                    clcmatchchange[translated_name] = to_python(match_result[key][subkey]["CD"])
+                    clcmatch[translated_name] = to_python(match_result[key][subkey]["VAL"] / 100)
+                    clcmatchchange[translated_name] = to_python(match_result[key][subkey]["CD"] / 100)
                 else:
                     clcmatch[translated_name] = None
                     clcmatchchange[translated_name] = None
@@ -579,7 +631,7 @@ def translate_match_results(sampledata, match_result, clclookup):
     output["clcsamplechange"] = clcsamplechange
 
     # Round all numeric values (except we want to keep clcsamplecperc as float later).
-    output = round_all_numbers(output)
+    # output = round_all_numbers(output)
 
     # Now compute clcsamplecperc as (clcsamplechange / clcsample)*100 for each clc value.
     # The result is kept as a float with one decimal.
@@ -627,7 +679,7 @@ def main(
     # calculate average distance between turbines
     turbines_gdf["buffer"] = cluster_distance(turbines_gdf["geometry"])
     # create a hull around the turbines (singlebuffer, concave or convex) also using the average distance
-    hull_gdf = create_hulls(turbines_gdf, hull_type=config["hulltype"])
+    hull_gdf = create_hulls(turbines_gdf, config)
     if DEBUG:
         hull_gdf.to_file("debug.geojson", driver="GeoJSON")
     # begin the result dictionary with prefilled area
@@ -640,14 +692,17 @@ def main(
             sampleres = sample_raster_values_within_polygon(values["path"], hull_gdf, values["result_type"])
         sampleresult[name] = sampleres
     if DEBUG:
-        print(sampleresult)
+        print("sampleresult:")
+        print(json.dumps(sampleresult, indent=2))
 
     matchresult = find_best_matching_row(sampleresult, clcdata, config)
     if DEBUG:
-        print(matchresult)
+        print("matchresult from db:")
+        print(json.dumps(matchresult, indent=2))
     mapresult = translate_match_results(sampleresult, matchresult, clclookup)
-    if DEBUG:
-        print(mapresult)
     hull_dict = json.loads(hull_gdf.to_json())
+    if DEBUG:
+        print("mapresult for WIMBYmap:")
+        print(json.dumps(mapresult, indent=2))
     mapresult["hull"] = hull_dict
     return mapresult
