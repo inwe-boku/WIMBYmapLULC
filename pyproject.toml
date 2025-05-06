@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "windlulc"
-version = "2025.02.14"
+version = "2025.05.06"
 dependencies = [
     "pandas",
     "openpyxl",
@@ -23,7 +23,7 @@ description = "Land Use and Land Cover Analysis plugin for the WIMBYmap"
 readme = "README.md"
 license = { file = "LICENSE" }
 classifiers = [
-    "Development Status :: 1 - Alpha",
+    "Development Status :: 2 - Beta",
     "Programming Language :: Python",
 ]
 

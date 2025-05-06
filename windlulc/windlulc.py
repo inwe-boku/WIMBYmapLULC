@@ -623,7 +623,7 @@ def translate_match_results(sampledata, match_result, clclookup):
         if match_val is None or match_change is None or match_val == 0:
             clcsamplechange[name] = None
         else:
-            clcsamplechange[name] = (match_change / match_val) * sample_val
+            clcsamplechange[name] = round((match_change / match_val) * sample_val, 2)
 
     output["clcsample"] = clcsample
     output["clcmatch"] = clcmatch
@@ -642,7 +642,14 @@ def translate_match_results(sampledata, match_result, clclookup):
         else:
             clcsamplecperc[name] = round((output["clcsamplechange"][name] / sample_val) * 100, 1)
 
+    carea = sum(clcsamplechange[key] for key in clcsamplechange)
+    wcperc = carea / output["area"] * 100
+
     output["clcsamplecperc"] = clcsamplecperc
+
+    output["averages"] = {}
+    output["averages"]["cperc"] = round(wcperc, 2)
+    output["averages"]["carea"] = round(carea, 1)
 
     return output
 
