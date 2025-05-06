@@ -14,7 +14,7 @@ Plugin for the WIMBYmap
 
 ### Example
 
-{'area': 724, 'slope': 1, 'tri': 3, 'clcsample': {'Non-irrigated arable land': 681, 'Pastures, meadows and other permanent grasslands under agricultural use': 30, 'Broad-leaved forest': 11}, 'clcmatch': {'Non-irrigated arable land': 790, 'Pastures, meadows and other permanent grasslands under agricultural use': 0, 'Broad-leaved forest': 0}, 'clcmatchchange': {'Non-irrigated arable land': 0, 'Pastures, meadows and other permanent grasslands under agricultural use': 0, 'Broad-leaved forest': 0}, 'clcsamplechange': {'Non-irrigated arable land': 0, 'Pastures, meadows and other permanent grasslands under agricultural use': None, 'Broad-leaved forest': None}, 'clcsamplecperc': {'Non-irrigated arable land': 0.0, 'Pastures, meadows and other permanent grasslands under agricultural use': None, 'Broad-leaved forest': None}, 'hull': {'type': 'FeatureCollection', 'features': [{'id': '0', 'type': 'Feature', 'properties': {'index': 0, 'buffer': 430, 'hull_id': 1}, 'geometry': {'type': 'Polygon', 'coordinates': [...], ]]}}], 'crs': {'type': 'name', 'properties': {'name': 'urn:ogc:def:crs:EPSG::3035'}}}}
+{'area': 724, 'slope': 1, 'tri': 3, 'clcsample': {'Non-irrigated arable land': 681, 'Pastures, meadows and other permanent grasslands under agricultural use': 30, 'Broad-leaved forest': 11}, 'clcmatch': {'Non-irrigated arable land': 790, 'Pastures, meadows and other permanent grasslands under agricultural use': 0, 'Broad-leaved forest': 0}, 'clcmatchchange': {'Non-irrigated arable land': 0, 'Pastures, meadows and other permanent grasslands under agricultural use': 0, 'Broad-leaved forest': 0}, 'clcsamplechange': {'Non-irrigated arable land': 0, 'Pastures, meadows and other permanent grasslands under agricultural use': None, 'Broad-leaved forest': None}, 'clcsamplecperc': {'Non-irrigated arable land': 0.0, 'Pastures, meadows and other permanent grasslands under agricultural use': None, 'Broad-leaved forest': None}, 'averages': {'cperc': 0.47, 'carea': 2.1}, 'hull': {'type': 'FeatureCollection', 'features': [{'id': '0', 'type': 'Feature', 'properties': {'index': 0, 'buffer': 430, 'hull_id': 1}, 'geometry': {'type': 'Polygon', 'coordinates': [...], ]]}}], 'crs': {'type': 'name', 'properties': {'name': 'urn:ogc:def:crs:EPSG::3035'}}}}
 
 - area in hectare
 - slope in ° (optional)
@@ -24,4 +24,5 @@ Plugin for the WIMBYmap
 - clcmatchchange: the match CD values in hectares from the CD database
 - clcsamplechange: the estimated CD values in hectares for the sample polygon
 - clcsamplecperc: the estimated CD % change within the polygon for each category
+- averages: cperc: area weighted average change percentage; carea: total change area
 - the hull geojson dictionary
