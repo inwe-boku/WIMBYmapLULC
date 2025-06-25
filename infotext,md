@@ -1,3 +1,1 @@
-## Infotext for the plugin frontend
-
 Percentage changes in land cover are calculated by comparing the layout, size, and underlying Corine Land Cover (CLC) types of 1,900 wind farms analyzed throughout Europe with Sentinel-2 satellite imagery from before and after the development of wind turbines. This includes the area changed for the turbine basement itself, as well as layoff areas and newly constructed roads. The presented numbers are calculated within the concave hull bounds around the turbines on the map.
