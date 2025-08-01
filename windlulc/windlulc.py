@@ -14,27 +14,26 @@ from shapely.geometry.base import BaseGeometry
 
 from . import PACKAGE_DIR
 
+# -----------------------------------------------------------------------------
+# Module‐level config storage
+# -----------------------------------------------------------------------------
+config: dict = {}
 
-def read_yaml_config(config_filename: str) -> dict:
+
+def init_config(config_filename: str) -> None:
     """
-    Reads a YAML configuration file and returns the configuration as a dictionary.
-
-    Args:
-        config_filename (str): The path to the YAML configuration file.
-
-    Returns:
-        dict: The parsed configuration data.
+    Load the YAML configuration once and store it in the module‐level `config`.
     """
+    global config
     try:
         with open(config_filename, "r") as file:
-            config = yaml.safe_load(file)
-        return config
+            config = yaml.safe_load(file) or {}
     except FileNotFoundError:
         print(f"Error: File '{config_filename}' not found.")
-        return {}
+        config = {}
     except yaml.YAMLError as exc:
         print(f"Error parsing YAML file: {exc}")
-        return {}
+        config = {}
 
 
 def turbines_geojson_to_gdf(turbines_geojson: dict) -> gpd.GeoDataFrame:
@@ -55,23 +54,17 @@ def turbines_geojson_to_gdf(turbines_geojson: dict) -> gpd.GeoDataFrame:
         print("No features found in the GeoJSON data.")
         return gpd.GeoDataFrame(crs="EPSG:4326")
 
-    records = []
-    geometries = []
+    records, geometries = [], []
     for feature in features:
-        properties = feature.get("properties", {})
-        geom = feature.get("geometry", None)
-        if geom is not None:
-            geometries.append(shape(geom))
-        else:
-            geometries.append(None)
-        records.append(properties)
+        props = feature.get("properties", {})
+        geom = feature.get("geometry")
+        geometries.append(shape(geom) if geom else None)
+        records.append(props)
 
-    # Create the GeoDataFrame with the CRS explicitly set to EPSG:4326
-    gdf = gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
-    return gdf
+    return gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
 
 
-def cluster_distance(points, threshold=9) -> int:
+def cluster_distance(points, threshold: float = 9) -> int:
     """
     Computes the average minimum distance among a set of points,
     considering only distances that are greater than or equal to a given threshold.
@@ -101,17 +94,17 @@ def cluster_distance(points, threshold=9) -> int:
     min_distances = np.min(dist_matrix, axis=1)
 
     # Compute and return the mean of these minimum distances as an integer
-    return int(np.mean(min_distances))
+    return int(np.mean(min_distances) * config["buffer_perc"])
 
 
-def create_hulls(points, config):
+def create_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     hull_type = config["hulltype"]
     if hull_type == "buffer":
-        hull_gdf = create_buffer_polygons(points, config["hullconfig"])
+        hull_gdf = create_buffer_polygons(points)
     elif hull_type == "convex":
-        hull_gdf = create_convex_hulls(points, config["hullconfig"])
+        hull_gdf = create_convex_hulls(points)
     elif hull_type == "concave":
-        hull_gdf = create_concave_hulls(points, config["hullconfig"])
+        hull_gdf = create_concave_hulls(points)
     else:
         raise ValueError("Invalid hull_type. Choose from 'buffer', 'convex', or 'concave'.")
     hull_gdf.reset_index(inplace=True)
@@ -119,7 +112,7 @@ def create_hulls(points, config):
     return hull_gdf
 
 
-def create_buffer_polygons(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoDataFrame:
+def create_buffer_polygons(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Generate buffer polygons for each geometry in a GeoDataFrame using provided configuration.
 
@@ -141,6 +134,7 @@ def create_buffer_polygons(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.Ge
             - The 'geometry' column is replaced by the computed buffer polygons.
             - The original CRS and all non-geometric columns are preserved.
     """
+    hullconfig = config["hullconfig"]
     # Compute combined scale and buffer distances
     scale_sum = hullconfig["bufferscale1"] + hullconfig["bufferscale2"]
     buffer_distances = points["buffer"].values * scale_sum
@@ -154,7 +148,7 @@ def create_buffer_polygons(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.Ge
     return buffer_gdf
 
 
-def create_convex_hulls(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoDataFrame:
+def create_convex_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Generate buffered convex hulls for clustered points using provided configuration.
 
@@ -177,6 +171,7 @@ def create_convex_hulls(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoDa
             - The 'geometry' column contains the buffered convex hulls.
             - All other non-geometric columns are preserved.
     """
+    hullconfig = config["hullconfig"]
     # Dissolve by cluster to group points
     grouped = points.dissolve()
 
@@ -213,6 +208,11 @@ def sample_buffer_boundaries(points: gpd.GeoDataFrame, scale: float, n_points: i
             - All original non-geometric columns preserved.
     """
     records = []
+    try:
+        scale = float(scale)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid scale for boundary sampling: {scale!r}")
+
     for _, row in points.iterrows():
         buf_geom = row.geometry.buffer(row["buffer"] * scale)
         boundary = buf_geom.boundary
@@ -225,7 +225,7 @@ def sample_buffer_boundaries(points: gpd.GeoDataFrame, scale: float, n_points: i
     return gpd.GeoDataFrame(records, crs=points.crs)
 
 
-def create_concave_hulls(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoDataFrame:
+def create_concave_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Generate buffered concave hulls for clustered points using provided configuration.
 
@@ -251,6 +251,7 @@ def create_concave_hulls(points: gpd.GeoDataFrame, hullconfig: dict) -> gpd.GeoD
             - The 'geometry' column contains the buffered concave hulls.
             - All other non-geometric columns are preserved.
     """
+    hullconfig = config["hullconfig"]
     # Sample boundaries based on configuration
     bp = sample_buffer_boundaries(points, hullconfig["bufferscale1"], hullconfig["sample_points"])
     # Dissolve by cluster to group points
@@ -340,7 +341,7 @@ def sample_raster_values_within_polygon(
         raise ValueError("Invalid result_type. Choose 'count' or 'mean'.")
 
 
-def find_best_matching_row(sampledata, csvdata, config):
+def find_best_matching_row(sampledata, csvdata) -> dict:
     """
     Given a sample dictionary and a CSV (as a pandas DataFrame),
     adapt the sample data to match the CSV columns by:
@@ -660,56 +661,39 @@ def main(
     geojson_dict: dict,
     DEBUG=False,
 ):
-    """
-    Main function for the windlulc package that processes the YAML configuration
-    and GeoJSON data.
-
-    Args:
-        yaml_filename (str): The path to the YAML configuration file.
-        geojson_dict (dict): The GeoJSON dictionary (for example, turbines data).
-    """
-    # Read and display the YAML configuration
-    config = read_yaml_config(PACKAGE_DIR / yaml_filename)
+    # initialize global config
+    init_config(PACKAGE_DIR / yaml_filename)
     if DEBUG:
-        print("YAML Configuration:")
-        print(config)
+        print("Loaded config:", json.dumps(config, indent=2))
 
-    clclookup_filename = os.path.join(PACKAGE_DIR, "data", "CLC.xlsx")
-    clcdata_filename = os.path.join(PACKAGE_DIR, "data", config["hulltype"] + ".feather")
+    # load lookup & database
+    clclookup = pd.read_excel(os.path.join(PACKAGE_DIR, "data", "CLC.xlsx"), sheet_name=config["clctype"])
+    clcdata = pd.read_feather(os.path.join(PACKAGE_DIR, "data", config["hulltype"] + ".feather"))
 
-    clclookup = pd.read_excel(clclookup_filename, sheet_name=config["clctype"])
-    clcdata = pd.read_feather(clcdata_filename)
-
-    # Convert the turbines GeoJSON to a GeoPandas GeoDataFrame and display it
-    turbines_gdf = turbines_geojson_to_gdf(geojson_dict)
-    turbines_gdf = turbines_gdf.to_crs(config["crs"])
-    # calculate average distance between turbines
+    # process turbines
+    turbines_gdf = turbines_geojson_to_gdf(geojson_dict).to_crs(config["crs"])
     turbines_gdf["buffer"] = cluster_distance(turbines_gdf["geometry"])
-    # create a hull around the turbines (singlebuffer, concave or convex) also using the average distance
-    hull_gdf = create_hulls(turbines_gdf, config)
+    hull_gdf = create_hulls(turbines_gdf)
     if DEBUG:
         hull_gdf.to_file("debug.geojson", driver="GeoJSON")
-    # begin the result dictionary with prefilled area
-    sampleresult = {"area": int(hull_gdf["geometry"][0].area)}
-    # loop throug all raster and vectorfiles defined
-    for name, values in data.items():
-        if values["type"] == "clc" and name != config["clctype"]:
-            continue
-        if values["type"] in ("raster", "clc"):
-            sampleres = sample_raster_values_within_polygon(values["path"], hull_gdf, values["result_type"])
-        sampleresult[name] = sampleres
-    if DEBUG:
-        print("sampleresult:")
-        print(json.dumps(sampleresult, indent=2))
 
-    matchresult = find_best_matching_row(sampleresult, clcdata, config)
+    # sample rasters/vectors
+    sampleresult = {"area": int(hull_gdf.geometry.iloc[0].area)}
+    for name, vals in data.items():
+        if vals["type"] == "clc" and name != config["clctype"]:
+            continue
+        if vals["type"] in ("raster", "clc"):
+            sampleres = sample_raster_values_within_polygon(vals["path"], hull_gdf, vals["result_type"])
+            sampleresult[name] = sampleres
     if DEBUG:
-        print("matchresult from db:")
-        print(json.dumps(matchresult, indent=2))
+        print("sampleresult:", json.dumps(sampleresult, indent=2))
+
+    matchresult = find_best_matching_row(sampleresult, clcdata)
+    if DEBUG:
+        print("matchresult:", json.dumps(matchresult, indent=2))
+
     mapresult = translate_match_results(sampleresult, matchresult, clclookup)
     hull_dict = json.loads(hull_gdf.to_json())
-    if DEBUG:
-        print("mapresult for WIMBYmap:")
-        print(json.dumps(mapresult, indent=2))
     mapresult["hull"] = hull_dict
+
     return mapresult

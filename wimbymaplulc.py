@@ -55,8 +55,8 @@ def run_wrapper():
         turbines_geojson,
         DEBUG=False,
     )
-    # print("mapresult for WIMBYmap:")
-    # print(json.dumps(mapresults, indent=2))
+    print("mapresult for WIMBYmap:")
+    print(json.dumps(mapresults, indent=2))
 
 
 if __name__ == "__main__":
