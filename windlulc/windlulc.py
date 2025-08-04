@@ -272,54 +272,32 @@ def sample_raster_values_within_polygon(
     raster_path: str,
     polygon: Union[gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry],
     result_type: str = "count",
+    upscale: int = 1,
 ):
     """
-    Samples raster values within a given polygon and computes:
-      - The pixel count per unique raster value.
-      - The average (mean) raster value within the polygon.
-
-    The function ensures that the polygon (or hull) is transformed to the same CRS as the raster file.
-
-    Parameters:
-      raster_path (str): Path to the raster file.
-      polygon (GeoDataFrame, GeoSeries, or shapely geometry): The polygon geometry for sampling.
-          If a GeoPandas object is provided, the first geometry is used after transforming it to the raster's CRS.
-      result_type (str): Specifies the output:
-          "count" returns a dictionary mapping each unique raster value to its pixel count.
-          "mean" returns the average raster value as a float.
-          Defaults to "count".
-
-    Returns:
-      dict or float:
-          dict: {raster_value: count} if result_type is "count" (empty dict if no valid pixels)
-          float: average raster value if result_type is "mean" (None if no valid pixels)
-
-    Raises:
-      ValueError: If result_type is not "count" or "mean".
+    Samples raster values within a given polygon and computes counts or mean.
+    Applies an optional upscale by repeating pixels if upscale > 1.
     """
     with rasterio.open(raster_path) as src:
         target_crs = src.crs
-
-        # Transform the polygon to the raster's CRS if necessary.
         if isinstance(polygon, (gpd.GeoDataFrame, gpd.GeoSeries)):
             if polygon.crs is not None and polygon.crs != target_crs:
                 polygon = polygon.to_crs(target_crs)
-            # Use the first geometry in the GeoPandas object.
             geom = polygon.geometry.iloc[0] if isinstance(polygon, gpd.GeoDataFrame) else polygon.iloc[0]
         else:
-            # Assume the shapely geometry is already in the correct CRS.
             geom = polygon
 
-        # Convert the geometry to a GeoJSON-like dict.
         geojson = [mapping(geom)]
         out_image, _ = mask(src, geojson, crop=True)
-        data = out_image[0]  # Assuming a single-band raster.
+        band = out_image[0]
+
+        # Apply upscale if requested
+        if upscale > 1:
+            band = np.repeat(np.repeat(band, upscale, axis=0), upscale, axis=1)
+
         nodata = src.nodata
 
-    # Filter out nodata values if defined.
-    valid_data = data if nodata is None else data[data != nodata]
-
-    # Handle the case where no valid sampling values are present.
+    valid_data = band if nodata is None else band[band != nodata]
     if valid_data.size == 0:
         if result_type == "count":
             return {}
@@ -333,12 +311,9 @@ def sample_raster_values_within_polygon(
     pixel_count = {int(k): int(v) for k, v in zip(unique, counts)}
     mean_value = float(np.mean(valid_data))
 
-    if result_type == "count":
-        return pixel_count
-    elif result_type == "mean":
-        return mean_value
-    else:
-        raise ValueError("Invalid result_type. Choose 'count' or 'mean'.")
+    print(pixel_count)
+
+    return pixel_count if result_type == "count" else mean_value
 
 
 def find_best_matching_row(sampledata, csvdata) -> dict:

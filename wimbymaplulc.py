@@ -16,10 +16,11 @@ DATA = {
         "path": "data/U2018_CLC2018_V2020_20u1.tif",
         "type": "clc",
         "result_type": "count",
+        "upscale": 10,
     },
     "slope": {
-        "type": "raster",
         "path": "data/Copernicus_SLOPE_90m_COG_3035.tif",
+        "type": "raster",
         "result_type": "mean",
     },
     "tri": {
