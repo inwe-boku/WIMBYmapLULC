@@ -16,6 +16,7 @@ DATA = {
         "path": "data/U2018_CLC2018_V2020_20u1.tif",
         "type": "clc",
         "result_type": "count",
+        "pixelarea": 10000,
         "upscale": 10,
     },
     "slope": {
@@ -56,8 +57,8 @@ def run_wrapper():
         turbines_geojson,
         DEBUG=False,
     )
-    print("mapresult for WIMBYmap:")
-    print(json.dumps(mapresults, indent=2))
+    # print("mapresult for WIMBYmap:")
+    # print(json.dumps(mapresults, indent=2))
 
 
 if __name__ == "__main__":

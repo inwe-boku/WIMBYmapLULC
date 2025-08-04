@@ -1,12 +1,14 @@
 import json
 import os
-from typing import Union
+from typing import Any, Dict, Optional, Union
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
 import yaml
+from affine import Affine
+from rasterio.features import geometry_mask
 from rasterio.mask import mask
 from scipy.spatial import distance
 from shapely.geometry import Point, mapping, shape
@@ -273,47 +275,82 @@ def sample_raster_values_within_polygon(
     polygon: Union[gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry],
     result_type: str = "count",
     upscale: int = 1,
-):
+    pixelarea: Optional[float] = None,
+) -> Union[Dict[Any, Any], float]:
     """
-    Samples raster values within a given polygon and computes counts or mean.
-    Applies an optional upscale by repeating pixels if upscale > 1.
+    Samples raster values within a polygon and returns:
+      - For CLC (when pixelarea provided and result_type 'count'): a dict of
+        {"key_VAL_<class>": area_m2, "key_CD_<class>": 0} for each class.
+      - Otherwise, if result_type is 'count': a dict of {value: area in m^2}.
+      - If result_type is 'mean': returns average raster value.
+
+    Uses `pixelarea` (m^2) if provided; otherwise derives from src.res.
+    Applies `upscale` by replicating pixels, then applies polygon mask to
+    upscaled grid so that only pixels inside the polygon are counted.
     """
+    # Open and read masked patch at original resolution
     with rasterio.open(raster_path) as src:
         target_crs = src.crs
+        res_x, res_y = src.res
+        orig_area = pixelarea if pixelarea is not None else abs(res_x * res_y)
+        pixel_area = orig_area / (upscale**2)
+        nodata = src.nodata
+
+        # transform polygon to raster CRS
         if isinstance(polygon, (gpd.GeoDataFrame, gpd.GeoSeries)):
-            if polygon.crs is not None and polygon.crs != target_crs:
+            if polygon.crs and polygon.crs != target_crs:
                 polygon = polygon.to_crs(target_crs)
             geom = polygon.geometry.iloc[0] if isinstance(polygon, gpd.GeoDataFrame) else polygon.iloc[0]
         else:
             geom = polygon
 
-        geojson = [mapping(geom)]
-        out_image, _ = mask(src, geojson, crop=True)
-        band = out_image[0]
+        # mask at original resolution, cropping to polygon bounds
+        patch, patch_transform = mask(src, [mapping(geom)], crop=True)
+        band_orig = patch[0]
 
-        # Apply upscale if requested
-        if upscale > 1:
-            band = np.repeat(np.repeat(band, upscale, axis=0), upscale, axis=1)
+    # Upscale if needed, then apply mask on upscaled grid
+    if upscale > 1:
+        # replicate pixels
+        band_up = np.repeat(np.repeat(band_orig, upscale, axis=0), upscale, axis=1)
+        # compute new transform (smaller pixels)
+        patch_transform_up = patch_transform * Affine.scale(1.0 / upscale, 1.0 / upscale)
+        # build mask: True outside polygon on upscaled grid
+        outside = geometry_mask([mapping(geom)], transform=patch_transform_up, invert=False, out_shape=band_up.shape)
+        # apply mask: set outside pixels to nodata
+        band_up[outside] = nodata
+        band = band_up
+    else:
+        band = band_orig
 
-        nodata = src.nodata
+    # Flatten and filter nodata
+    vals = band.ravel()
+    if nodata is not None:
+        vals = vals[vals != nodata]
 
-    valid_data = band if nodata is None else band[band != nodata]
-    if valid_data.size == 0:
-        if result_type == "count":
-            return {}
-        elif result_type == "mean":
-            return None
-        else:
-            raise ValueError("Invalid result_type. Choose 'count' or 'mean'.")
+    # CLC-specific sampling: when pixelarea provided and count requested
+    if pixelarea is not None and result_type == "count":
+        # drop zeros (background)
+        vals = vals[vals != 0]
+        # count occurrences
+        counts = pd.Series(vals).value_counts().to_dict() if vals.size > 0 else {}
+        stats: Dict[str, int] = {}
+        for cls, cnt in counts.items():
+            area_m2 = int(cnt * pixel_area)
+            stats[f"{cls}"] = area_m2
+        return stats
 
-    unique, counts = np.unique(valid_data, return_counts=True)
-    counts = counts * 100
-    pixel_count = {int(k): int(v) for k, v in zip(unique, counts)}
-    mean_value = float(np.mean(valid_data))
+    # Generic sampling
+    if vals.size == 0:
+        return {} if result_type == "count" else None
 
-    print(pixel_count)
-
-    return pixel_count if result_type == "count" else mean_value
+    unique, counts = np.unique(vals, return_counts=True)
+    sqm_counts = counts.astype(float) * pixel_area
+    if result_type == "count":
+        return {int(k): int(sqm) for k, sqm in zip(unique, sqm_counts)}
+    elif result_type == "mean":
+        return float(np.mean(vals))
+    else:
+        raise ValueError(f"Unknown result_type '{result_type}'")
 
 
 def find_best_matching_row(sampledata, csvdata) -> dict:
@@ -343,7 +380,7 @@ def find_best_matching_row(sampledata, csvdata) -> dict:
     Parameters:
       sampledata (dict): Expected to include keys such as 'area', 'slope', 'tri', etc.,
                          and for any key starting with "clc" whose value is a dict, those will be flattened.
-                         Note: clc values are in pixels (each pixel = 10,000 m²).
+                         Note: clc values are given in square meters.
       csvdata (pd.DataFrame): DataFrame with columns corresponding to the adapted sample data.
       config (dict): A configuration dictionary with at least the following keys:
           - "clc_minperc": The minimum percentage of the total area required for a clc value to be used.
@@ -375,17 +412,18 @@ def find_best_matching_row(sampledata, csvdata) -> dict:
     # 2. Filter out clc values that are less than the configured percentage of the total area.
     # Each clc value is in pixels, where one pixel represents 10,000 m².
     # A clc value is kept if:
-    #    (clc value * 10,000) >= (config["clc_minperc"]/100 * sampledata["area"])
-    # Equivalently, clc value >= (sampledata["area"] * config["clc_minperc"]) / 1,000,000
+    #    (clc value) >= (config["clc_minperc"]/100 * sampledata["area"])
+    # Equivalently, clc value >= (sampledata["area"] * config["clc_minperc"]) / 100
     if "area" not in sampledata:
         raise ValueError("Missing 'area' in sampledata")
     area_value = sampledata["area"]
-    clc_threshold = area_value * config["clc_minperc"] / 1000000.0
+    clc_threshold = area_value * config["clc_minperc"] / 100
 
     # Remove clc keys with values below the threshold.
     keys_to_remove = [
         key for key in adapted_sampledata if key.startswith("clc") and adapted_sampledata[key] < clc_threshold
     ]
+    print(keys_to_remove)
     for key in keys_to_remove:
         del adapted_sampledata[key]
 
@@ -658,7 +696,11 @@ def main(
         if vals["type"] == "clc" and name != config["clctype"]:
             continue
         if vals["type"] in ("raster", "clc"):
-            sampleres = sample_raster_values_within_polygon(vals["path"], hull_gdf, vals["result_type"])
+            upscale = vals.get("upscale", 1)
+            pixarea = vals.get("pixelarea", None)
+            sampleres = sample_raster_values_within_polygon(
+                vals["path"], hull_gdf, vals.get("result_type"), upscale, pixarea
+            )
             sampleresult[name] = sampleres
     if DEBUG:
         print("sampleresult:", json.dumps(sampleresult, indent=2))
@@ -666,7 +708,6 @@ def main(
     matchresult = find_best_matching_row(sampleresult, clcdata)
     if DEBUG:
         print("matchresult:", json.dumps(matchresult, indent=2))
-
     mapresult = translate_match_results(sampleresult, matchresult, clclookup)
     hull_dict = json.loads(hull_gdf.to_json())
     mapresult["hull"] = hull_dict
