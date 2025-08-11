@@ -1,14 +1,12 @@
 import json
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
 import yaml
-from affine import Affine
-from rasterio.features import geometry_mask
 from rasterio.mask import mask
 from scipy.spatial import distance
 from shapely.geometry import Point, mapping, shape
@@ -270,87 +268,100 @@ def create_concave_hulls(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return result_gdf
 
 
-def sample_raster_values_within_polygon(
-    raster_path: str,
-    polygon: Union[gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry],
-    result_type: str = "count",
-    upscale: int = 1,
-    pixelarea: Optional[float] = None,
-) -> Union[Dict[Any, Any], float]:
+def sample_mean_raster_values_within_polygon(
+    raster_path: str, polygon: Union[gpd.GeoDataFrame, gpd.GeoSeries, "BaseGeometry"]
+) -> Optional[float]:
     """
-    Samples raster values within a polygon and returns:
-      - For CLC (when pixelarea provided and result_type 'count'): a dict of
-        {"key_VAL_<class>": area_m2, "key_CD_<class>": 0} for each class.
-      - Otherwise, if result_type is 'count': a dict of {value: area in m^2}.
-      - If result_type is 'mean': returns average raster value.
+    Calculates the mean raster value within the given polygon.
 
-    Uses `pixelarea` (m^2) if provided; otherwise derives from src.res.
-    Applies `upscale` by replicating pixels, then applies polygon mask to
-    upscaled grid so that only pixels inside the polygon are counted.
+    Args:
+        raster_path: Path to the raster file.
+        polygon: Polygon geometry (GeoDataFrame, GeoSeries, or shapely geometry).
+
+    Returns:
+        The mean raster value within the polygon, or None if no valid pixels are found.
     """
-    # Open and read masked patch at original resolution
     with rasterio.open(raster_path) as src:
-        target_crs = src.crs
-        res_x, res_y = src.res
-        orig_area = pixelarea if pixelarea is not None else abs(res_x * res_y)
-        pixel_area = orig_area / (upscale**2)
-        nodata = src.nodata
-
-        # transform polygon to raster CRS
+        # Transform polygon to raster CRS if needed
         if isinstance(polygon, (gpd.GeoDataFrame, gpd.GeoSeries)):
-            if polygon.crs and polygon.crs != target_crs:
-                polygon = polygon.to_crs(target_crs)
+            if polygon.crs and polygon.crs != src.crs:
+                polygon = polygon.to_crs(src.crs)
             geom = polygon.geometry.iloc[0] if isinstance(polygon, gpd.GeoDataFrame) else polygon.iloc[0]
         else:
             geom = polygon
 
-        # mask at original resolution, cropping to polygon bounds
-        patch, patch_transform = mask(src, [mapping(geom)], crop=True)
-        band_orig = patch[0]
+        # Mask raster with polygon (crops to bounds)
+        patch, _ = mask(src, [mapping(geom)], crop=True)
+        band = patch[0]
+        nodata = src.nodata
 
-    # Upscale if needed, then apply mask on upscaled grid
-    if upscale > 1:
-        # replicate pixels
-        band_up = np.repeat(np.repeat(band_orig, upscale, axis=0), upscale, axis=1)
-        # compute new transform (smaller pixels)
-        patch_transform_up = patch_transform * Affine.scale(1.0 / upscale, 1.0 / upscale)
-        # build mask: True outside polygon on upscaled grid
-        outside = geometry_mask([mapping(geom)], transform=patch_transform_up, invert=False, out_shape=band_up.shape)
-        # apply mask: set outside pixels to nodata
-        band_up[outside] = nodata
-        band = band_up
-    else:
-        band = band_orig
-
-    # Flatten and filter nodata
+    # Flatten and filter out nodata values
     vals = band.ravel()
     if nodata is not None:
         vals = vals[vals != nodata]
-
-    # CLC-specific sampling: when pixelarea provided and count requested
-    if pixelarea is not None and result_type == "count":
-        # drop zeros (background)
-        vals = vals[vals != 0]
-        # count occurrences
-        counts = pd.Series(vals).value_counts().to_dict() if vals.size > 0 else {}
-        stats: Dict[str, int] = {}
-        for cls, cnt in counts.items():
-            area_m2 = int(cnt * pixel_area)
-            stats[f"{cls}"] = area_m2
-        return stats
-
-    # Generic sampling
     if vals.size == 0:
-        return {} if result_type == "count" else None
+        return None
 
-    unique, counts = np.unique(vals, return_counts=True)
-    sqm_counts = counts.astype(float) * pixel_area
-    if result_type == "count":
-        return {int(k): int(sqm) for k, sqm in zip(unique, sqm_counts)}
-    elif result_type == "mean":
-        return float(np.mean(vals))
+    return round(float(vals.mean()), 3)
+
+
+def sample_count_raster_values_within_polygon(
+    raster_path: str,
+    polygon: Union[gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry],
+    pixarea: Optional[float] = None,
+    upscale: int = 1,
+) -> Dict[int, float]:
+    """
+    Samples a single polygon against the raster, applies optional upscaling,
+    and returns class counts scaled to square meters as {value: area_m2}.
+
+    Args:
+        raster_path: Path to raster file.
+        polygon: Polygon geometry (GeoDataFrame, GeoSeries, or shapely geometry).
+        pixarea: Area of one pixel in m². If provided, results are scaled by pixel area and upscaling.
+        upscale: Integer factor for upscaling pixels (replicates pixels in blocks).
+
+    Returns:
+        Dict with raster value classes as keys and total area in m² within polygon as values.
+    """
+    with rasterio.open(raster_path) as src:
+        # Transform polygon to raster CRS if needed
+        if isinstance(polygon, (gpd.GeoDataFrame, gpd.GeoSeries)):
+            if polygon.crs and polygon.crs != src.crs:
+                polygon = polygon.to_crs(src.crs)
+            geom = polygon.geometry.iloc[0] if isinstance(polygon, gpd.GeoDataFrame) else polygon.iloc[0]
+        else:
+            geom = polygon
+
+        nodata_val = src.nodata
+        out_image, _ = mask(src, [mapping(geom)], crop=True)
+        band = out_image[0]
+
+    # Apply integer upscaling if requested
+    if upscale > 1:
+        band = np.repeat(np.repeat(band, upscale, axis=0), upscale, axis=1)
+
+    # Flatten and filter out nodata and zero values
+    vals = band.ravel()
+    if nodata_val is not None:
+        vals = vals[vals != nodata_val]
+    vals = vals[vals != 0]
+
+    if vals.size == 0:
+        return {}
+
+    # Count occurrences of each class
+    counts = pd.Series(vals).value_counts()
+
+    # Calculate area per pixel after upscaling
+    if pixarea is not None:
+        pixel_area = pixarea / (upscale**2)
+        # Multiply counts by pixel area for total area in m²
+        area_per_class = {int(k): float(v) * pixel_area for k, v in counts.items()}
+        return area_per_class
     else:
-        raise ValueError(f"Unknown result_type '{result_type}'")
+        # If no pixel area given, return raw counts as integers
+        return {int(k): int(v) for k, v in counts.items()}
 
 
 def find_best_matching_row(sampledata, csvdata) -> dict:
@@ -692,16 +703,16 @@ def main(
 
     # sample rasters/vectors
     sampleresult = {"area": int(hull_gdf.geometry.iloc[0].area)}
+    print(sampleresult)
     for name, vals in data.items():
-        if vals["type"] == "clc" and name != config["clctype"]:
-            continue
-        if vals["type"] in ("raster", "clc"):
-            upscale = vals.get("upscale", 1)
-            pixarea = vals.get("pixelarea", None)
-            sampleres = sample_raster_values_within_polygon(
-                vals["path"], hull_gdf, vals.get("result_type"), upscale, pixarea
-            )
-            sampleresult[name] = sampleres
+        upscale = vals.get("upscale", 1)
+        pixarea = vals.get("pixelarea", None)
+        restype = vals.get("result_type", "mean")
+        if restype == "mean":
+            sampleres = sample_mean_raster_values_within_polygon(vals["path"], hull_gdf)
+        elif restype == "count":
+            sampleres = sample_count_raster_values_within_polygon(vals["path"], hull_gdf, pixarea, upscale)
+        sampleresult[name] = sampleres
     if DEBUG:
         print("sampleresult:", json.dumps(sampleresult, indent=2))
 
