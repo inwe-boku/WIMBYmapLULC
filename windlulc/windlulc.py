@@ -7,12 +7,11 @@ import numpy as np
 import pandas as pd
 import rasterio
 import yaml
-from rasterio.io import MemoryFile
+from rasterio.enums import Resampling
 from rasterio.mask import mask
-from rasterio.transform import Affine
 from rasterio.windows import from_bounds
 from scipy.spatial import distance
-from shapely.geometry import Point, box, mapping, shape
+from shapely.geometry import Point, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
 from . import PACKAGE_DIR
@@ -313,70 +312,106 @@ def sample_count_raster_values_within_polygon(
     polygon: Union[gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry],
     pixarea: Optional[float] = None,
     upscale: int = 1,
+    buffer_distance: float = 500,  # Buffer in meters
 ) -> Dict[int, float]:
     """
-    Samples a single polygon against the raster, applies optional upscaling,
-    and returns class counts scaled to square meters as {value: area_m2}.
+    Samples a single polygon against the raster with efficient buffered reading,
+    applies upscaling before masking, and returns class counts scaled to square meters.
 
     Args:
         raster_path: Path to raster file.
         polygon: Polygon geometry (GeoDataFrame, GeoSeries, or shapely geometry).
         pixarea: Area of one pixel in m². If provided, results are scaled by pixel area and upscaling.
-        upscale: Integer factor for upscaling pixels (replicates pixels in blocks).
+        upscale: Integer factor for upscaling pixels (applied before masking).
+        buffer_distance: Buffer distance in meters around polygon for reading raster data.
 
     Returns:
         Dict with raster value classes as keys and total area in m² within polygon as values.
     """
     with rasterio.open(raster_path) as src:
-        polygon = polygon.to_crs(src.crs)
-        minx, miny, maxx, maxy = polygon.total_bounds
-        bbox = box(minx, miny, maxx, maxy).buffer(100)
-        buffered_bounds = bbox.bounds  # (minx, miny, maxx, maxy)
-        window = from_bounds(*buffered_bounds, transform=src.transform)
-        out_transform = src.window_transform(window)
-        cropped = src.read(1, window=window)
-        profile = src.profile.copy()
-        nodata_val = src.nodata
+        # Transform polygon to raster CRS if needed
+        if isinstance(polygon, (gpd.GeoDataFrame, gpd.GeoSeries)):
+            if polygon.crs and polygon.crs != src.crs:
+                polygon = polygon.to_crs(src.crs)
+            geom = polygon.geometry.iloc[0] if isinstance(polygon, gpd.GeoDataFrame) else polygon.iloc[0]
+        else:
+            geom = polygon
 
-    if upscale > 1:
-        upscaled = np.repeat(np.repeat(cropped, upscale, axis=0), upscale, axis=1)
-        # Update the transform for the upscaled array
-        new_transform = Affine(
-            out_transform.a / upscale,
-            out_transform.b,
-            out_transform.c,
-            out_transform.d,
-            out_transform.e / upscale,
-            out_transform.f,
-        )
-    else:
-        upscaled = cropped
-        new_transform = out_transform
+        # Buffer the polygon to define reading area
+        buffered_geom = geom.buffer(buffer_distance)
 
-    profile.update({"height": upscaled.shape[0], "width": upscaled.shape[1], "transform": new_transform})
+        # Get bounds of buffered polygon
+        minx, miny, maxx, maxy = buffered_geom.bounds
 
-    with MemoryFile() as memfile:
-        with memfile.open(**profile) as dataset:
-            dataset.write(upscaled, 1)
-            out_image, _ = mask(dataset, polygon.geometry, crop=True)
-            band = out_image[0]
-            # 'band' now contains the final upscaled and masked output
+        # Create window for reading only the buffered area[1][6]
+        window = from_bounds(minx, miny, maxx, maxy, transform=src.transform)
 
+        # Read the windowed raster data with upscaling applied
+        if upscale > 1:
+            # Calculate new dimensions for upscaling
+            window_height = window.height
+            window_width = window.width
+            new_height = int(window_height * upscale)
+            new_width = int(window_width * upscale)
+
+            # Read with upscaling using out_shape parameter[10]
+            windowed_data = src.read(
+                1,
+                window=window,
+                out_shape=(new_height, new_width),
+                resampling=Resampling.nearest,  # Use nearest for categorical data
+            )
+
+            # Update transform for the upscaled data
+            upscaled_transform = src.window_transform(window) * src.window_transform(window).scale(
+                (window_width / new_width), (window_height / new_height)
+            )
+        else:
+            # Read without upscaling
+            windowed_data = src.read(1, window=window)
+            upscaled_transform = src.window_transform(window)
+
+        # Create a temporary in-memory dataset for masking
+        from rasterio.io import MemoryFile
+
+        with MemoryFile() as memfile:
+            with memfile.open(
+                driver="GTiff",
+                height=windowed_data.shape[0],
+                width=windowed_data.shape[1],
+                count=1,
+                dtype=windowed_data.dtype,
+                crs=src.crs,
+                transform=upscaled_transform,
+                nodata=src.nodata,
+            ) as temp_dataset:
+                temp_dataset.write(windowed_data, 1)
+
+                # Now apply mask to the upscaled windowed data[1][3]
+                nodata_val = src.nodata
+                out_image, _ = mask(temp_dataset, [mapping(geom)], crop=True)
+                band = out_image[0]
+
+    # Flatten and filter out nodata and zero values
     vals = band.ravel()
     if nodata_val is not None:
         vals = vals[vals != nodata_val]
     vals = vals[vals != 0]
 
-    # Compute counts of each class
-    if vals.size > 0:
-        counts = pd.Series(vals).value_counts()
-    else:
-        counts = {}
-    if pixarea > 0:
+    if vals.size == 0:
+        return {}
+
+    # Count occurrences of each class
+    counts = pd.Series(vals).value_counts()
+
+    # Calculate area per pixel (already accounts for upscaling since we upscaled before counting)
+    if pixarea is not None:
         pixel_area = pixarea / (upscale**2)
+        # Multiply counts by pixel area for total area in m²
         area_per_class = {int(k): float(v) * pixel_area for k, v in counts.items()}
         return area_per_class
     else:
+        # If no pixel area given, return raw counts as integers
         return {int(k): int(v) for k, v in counts.items()}
 
 
@@ -450,7 +485,6 @@ def find_best_matching_row(sampledata, csvdata) -> dict:
     keys_to_remove = [
         key for key in adapted_sampledata if key.startswith("clc") and adapted_sampledata[key] < clc_threshold
     ]
-    print(keys_to_remove)
     for key in keys_to_remove:
         del adapted_sampledata[key]
 
@@ -645,12 +679,12 @@ def translate_match_results(sampledata, match_result, clclookup):
         if key.startswith("clc") and isinstance(clc_dict, dict):
             for subkey, original_value in clc_dict.items():
                 translated_name = translate_clc(subkey)
-                clcsample[translated_name] = to_python(original_value / 100)
+                clcsample[translated_name] = to_python(round(original_value / 10000, 1))
                 # For the matching result, we expect the same clc key structure:
                 # match_result[key] is a dict with subkeys mapping to dicts containing "VAL" and "CD".
                 if key in match_result and subkey in match_result[key]:
-                    clcmatch[translated_name] = to_python(match_result[key][subkey]["VAL"] / 100)
-                    clcmatchchange[translated_name] = to_python(match_result[key][subkey]["CD"] / 100)
+                    clcmatch[translated_name] = to_python(round(match_result[key][subkey]["VAL"] / 10000, 1))
+                    clcmatchchange[translated_name] = to_python(round(match_result[key][subkey]["CD"] / 10000, 1))
                 else:
                     clcmatch[translated_name] = None
                     clcmatchchange[translated_name] = None
@@ -719,7 +753,6 @@ def main(
 
     # sample rasters/vectors
     sampleresult = {"area": int(hull_gdf.geometry.iloc[0].area)}
-    print(sampleresult)
     for name, vals in data.items():
         upscale = vals.get("upscale", 1)
         pixarea = vals.get("pixelarea", None)
@@ -736,6 +769,8 @@ def main(
     if DEBUG:
         print("matchresult:", json.dumps(matchresult, indent=2))
     mapresult = translate_match_results(sampleresult, matchresult, clclookup)
+    if DEBUG:
+        print("mapresult:", json.dumps(mapresult, indent=2))
     hull_dict = json.loads(hull_gdf.to_json())
     mapresult["hull"] = hull_dict
 
