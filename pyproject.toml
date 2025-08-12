@@ -3,18 +3,24 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
+classifiers = [
+    "Development Status :: 5 - Production/Stable"
+    "Programming Language :: Python",
+]
 name = "windlulc"
-version = "2025.05.06"
+version = "2025.08.12"
 dependencies = [
-    "pandas",
-    "openpyxl",
     "pyarrow",
+    "json",
+    "typing",
+    "pandas",
     "numpy",
     "geopandas",
     "scipy",
     "shapely",
     "pyyaml",
     "rasterio",
+    "openpyxl",
 ]
 requires-python = ">=3.10"
 authors = [{ name = "Christian Mikovits" }, { name = "Thomas Öberseder" }]
@@ -22,10 +28,6 @@ maintainers = [{ name = "Christian Mikovits" }, { name = "Thomas Öberseder" }]
 description = "Land Use and Land Cover Analysis plugin for the WIMBYmap"
 readme = "README.md"
 license = { file = "LICENSE" }
-classifiers = [
-    "Development Status :: 2 - Beta",
-    "Programming Language :: Python",
-]
 
 [tool.setuptools]
 packages = ["windlulc"]
