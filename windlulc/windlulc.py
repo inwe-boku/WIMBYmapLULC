@@ -7,9 +7,12 @@ import numpy as np
 import pandas as pd
 import rasterio
 import yaml
+from rasterio.io import MemoryFile
 from rasterio.mask import mask
+from rasterio.transform import Affine
+from rasterio.windows import from_bounds
 from scipy.spatial import distance
-from shapely.geometry import Point, mapping, shape
+from shapely.geometry import Point, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
 from . import PACKAGE_DIR
@@ -325,42 +328,55 @@ def sample_count_raster_values_within_polygon(
         Dict with raster value classes as keys and total area in m² within polygon as values.
     """
     with rasterio.open(raster_path) as src:
-        # Transform polygon to raster CRS if needed
-        if isinstance(polygon, (gpd.GeoDataFrame, gpd.GeoSeries)):
-            if polygon.crs and polygon.crs != src.crs:
-                polygon = polygon.to_crs(src.crs)
-            geom = polygon.geometry.iloc[0] if isinstance(polygon, gpd.GeoDataFrame) else polygon.iloc[0]
-        else:
-            geom = polygon
-
+        polygon = polygon.to_crs(src.crs)
+        minx, miny, maxx, maxy = polygon.total_bounds
+        bbox = box(minx, miny, maxx, maxy).buffer(100)
+        buffered_bounds = bbox.bounds  # (minx, miny, maxx, maxy)
+        window = from_bounds(*buffered_bounds, transform=src.transform)
+        out_transform = src.window_transform(window)
+        cropped = src.read(1, window=window)
+        profile = src.profile.copy()
         nodata_val = src.nodata
-        out_image, _ = mask(src, [mapping(geom)], crop=True)
-        band = out_image[0]
 
-    # Apply integer upscaling if requested
     if upscale > 1:
-        band = np.repeat(np.repeat(band, upscale, axis=0), upscale, axis=1)
+        upscaled = np.repeat(np.repeat(cropped, upscale, axis=0), upscale, axis=1)
+        # Update the transform for the upscaled array
+        new_transform = Affine(
+            out_transform.a / upscale,
+            out_transform.b,
+            out_transform.c,
+            out_transform.d,
+            out_transform.e / upscale,
+            out_transform.f,
+        )
+    else:
+        upscaled = cropped
+        new_transform = out_transform
 
-    # Flatten and filter out nodata and zero values
+    profile.update({"height": upscaled.shape[0], "width": upscaled.shape[1], "transform": new_transform})
+
+    with MemoryFile() as memfile:
+        with memfile.open(**profile) as dataset:
+            dataset.write(upscaled, 1)
+            out_image, _ = mask(dataset, polygon.geometry, crop=True)
+            band = out_image[0]
+            # 'band' now contains the final upscaled and masked output
+
     vals = band.ravel()
     if nodata_val is not None:
         vals = vals[vals != nodata_val]
     vals = vals[vals != 0]
 
-    if vals.size == 0:
-        return {}
-
-    # Count occurrences of each class
-    counts = pd.Series(vals).value_counts()
-
-    # Calculate area per pixel after upscaling
-    if pixarea is not None:
+    # Compute counts of each class
+    if vals.size > 0:
+        counts = pd.Series(vals).value_counts()
+    else:
+        counts = {}
+    if pixarea > 0:
         pixel_area = pixarea / (upscale**2)
-        # Multiply counts by pixel area for total area in m²
         area_per_class = {int(k): float(v) * pixel_area for k, v in counts.items()}
         return area_per_class
     else:
-        # If no pixel area given, return raw counts as integers
         return {int(k): int(v) for k, v in counts.items()}
 
 
