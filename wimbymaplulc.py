@@ -8,7 +8,7 @@ import windlulc
 # basic config
 
 CONFIG_FILENAME = "windlulc.yaml"
-TGEOJSON_FILENAME = "test/austria_alpine.geojson"
+TGEOJSON_FILENAME = "test/germany_test1.geojson"
 
 # datafiles
 DATA = {
